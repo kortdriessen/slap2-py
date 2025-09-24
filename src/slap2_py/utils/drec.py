@@ -1,12 +1,15 @@
 from __future__ import annotations
-import numpy as np
+
 from dataclasses import dataclass
+
 import h5py
+import numpy as np
 import pandas as pd
 
-def load_sync_file(path: str):
-    full_sync = h5py.File(path, 'r')
-    return full_sync['slap2_acquiring_trigger'][:], full_sync['electrophysiology'][:]
+
+def load_datarec_file(path: str):
+    datarec = h5py.File(path, "r")
+    return datarec
 
 
 @dataclass
@@ -148,6 +151,7 @@ def detect_up_periods(
     times = bouts / fs
     durs = (bouts[:, 1] - bouts[:, 0]) / fs
     return UpPeriods(bouts, times, durs, (low_est, high_est, T_down, T_up))
+
 
 def generate_scope_index_df(
     scope,

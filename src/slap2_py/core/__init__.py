@@ -2,7 +2,10 @@
 Core data types and functions.
 """
 
-from .SlapData import (
-    SlapData,
+from .ExSum import (
+    ExSum,
 )
-__all__ = ["SlapData"]
+
+__all__ = [
+    "ExSum",
+]

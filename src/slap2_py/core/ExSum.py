@@ -136,7 +136,7 @@ class ExSum:
                     "roi_ch1": rd2,
                     "roi_ch2": rd1,
                     "roi_name": name,
-                    "DMD": DMD,
+                    "DMD": DMD + 1,
                 }
             )
             roi_dfs.append(roi_df)

@@ -8,3 +8,8 @@ from . import (
 from . import (
     gen as gen,
 )
+from . import (
+    hfive as hfive,
+)
+
+__all__ = ["drec", "gen", "hfive"]

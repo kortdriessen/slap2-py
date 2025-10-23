@@ -1,5 +1,3 @@
-# Re-define MatV73Reader and add the `load_any` meta-loader in a single cell, then test on the uploaded file.
-
 from __future__ import annotations
 
 import re

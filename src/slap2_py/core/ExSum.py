@@ -9,29 +9,6 @@ import numpy as np
 import polars as pl
 
 
-def extract_trace_group(
-    dat: ExSum, group: str = "dF", trace: str = "matchFilt", extract_chan: int = 2
-):
-    n_chunks = len(dat.data["E"])
-    full_data = {}
-    full_data["DMD1"] = []
-    full_data["DMD2"] = []
-    for dmd in [1, 2]:
-        for chunk in range(n_chunks):
-            if dat.data["E"][chunk][dmd - 1][group][trace].ndim == 3:
-                full_data[f"DMD{dmd}"].append(
-                    dat.data["E"][chunk][dmd - 1][group][trace][:, :, extract_chan - 1]
-                )
-            elif dat.data["E"][chunk][dmd - 1][group][trace].ndim == 2:
-                full_data[f"DMD{dmd}"].append(
-                    dat.data["E"][chunk][dmd - 1][group][trace]
-                )
-            else:
-                raise ValueError("Unexpected number of dimensions")
-        full_data[f"DMD{dmd}"] = np.concatenate(full_data[f"DMD{dmd}"], axis=1)
-    return full_data
-
-
 @dataclass(slots=True)
 class ExSum:
     """
@@ -111,6 +88,7 @@ class ExSum:
     def extract_soma_activity(self, dmd: int, version: str = "Fsvd") -> pl.DataFrame:
         DMD = dmd - 1
         edat = self.data["E"]
+        print(f"DMD is {DMD}")
         roi_info = self.data["userROIs"]
         num_rois = edat[0][DMD]["ROIs"][version].shape[0]
         roi_names = [roi_info[DMD][i]["Label"] for i in range(num_rois)]
@@ -120,6 +98,14 @@ class ExSum:
             dat_ch1 = []
             dat_ch2 = []
             for trl in np.arange(len(edat)):
+                if edat[trl][DMD] is None:
+                    print(f"trl {trl} is DEAD, appending nan array")
+                    nan_array = (
+                        np.ones_like(roi_dat1) * np.nan
+                    )  # TODO: this is a mess in all of these functions
+                    dat_ch1.append(nan_array)
+                    dat_ch2.append(nan_array)
+                    continue
                 roi_dat1 = edat[trl][DMD]["ROIs"][version][i, :, 0]
                 roi_dat2 = edat[trl][DMD]["ROIs"][version][i, :, 1]
                 dat_ch1.append(roi_dat1)
@@ -162,6 +148,7 @@ class ExSum:
             if len(self.data["userROIs"][dmd - 1]) == 0:
                 continue
             else:
+                print(f"extracting soma activity for DMD {dmd} with version {version}")
                 dmd_df = self.extract_soma_activity(dmd, version)
                 dmd_dfs.append(dmd_df)
         return pl.concat(dmd_dfs)
@@ -175,11 +162,21 @@ class ExSum:
                 traces_ch1 = []
                 traces_ch2 = []
                 for trl in range(n_trials):
+                    if self.data["E"][trl][dmd - 1] is None:
+                        print(f"trl {trl} is DEAD on DMD {dmd}, appending nan array")
+                        nan_array = np.ones_like(traces_ch1) * np.nan
+                        traces_ch1.append(nan_array)
+                        traces_ch2.append(nan_array)
+                        continue
                     traces_ch1.append(
-                        self.data["E"][trl][dmd - 1][trace_group]["ls"][src, :, 0]
+                        self.data["E"][trl][dmd - 1][trace_group]["ls"][
+                            src, :, 1
+                        ]  # note the flipping of channel order here!! When activityChannel is set to 2, then it gets assigned as 1 here
                     )
                     traces_ch2.append(
-                        self.data["E"][trl][dmd - 1][trace_group]["ls"][src, :, 1]
+                        self.data["E"][trl][dmd - 1][trace_group]["ls"][
+                            src, :, 0
+                        ]  # note the flipping of channel order here!! When activityChannel is set to 1, then it gets assigned as 2 here
                     )
                 traces_ch1 = np.concatenate(traces_ch1)
                 traces_ch2 = np.concatenate(traces_ch2)
@@ -247,6 +244,13 @@ class ExSum:
                 for src in range(n_sources):
                     traces_list = []
                     for trl in range(n_trials):
+                        if self.data["E"][trl][dmd - 1] is None:
+                            print(
+                                f"trl {trl} is DEAD on DMD {dmd}, appending nan array"
+                            )
+                            nan_array = np.ones_like(traces) * np.nan
+                            traces_list.append(nan_array)
+                            continue
                         traces = self.data["E"][trl][dmd - 1][trace_group][trace_type][
                             src, :
                         ]

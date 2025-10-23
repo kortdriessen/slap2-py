@@ -1,0 +1,84 @@
+##### Base look
+figure.figsize: 4.5, 3.2
+figure.dpi: 100
+figure.facecolor: 0B0F14
+axes.facecolor: 0F141A
+axes.edgecolor: DDE3EA
+axes.linewidth: 0.9
+axes.spines.top: True
+axes.spines.right: True
+axes.labelcolor: E8EEF5
+axes.unicode_minus: True
+axes.titlelocation: center
+axes.titleweight: semibold
+axes.titlesize: 10
+axes.labelsize: 8
+axes.titlepad: 6.0
+axes.titlecolor: F5F6F7
+
+##### Fonts (vector-friendly)
+font.family: DejaVu Sans
+font.size: 10
+mathtext.fontset: dejavusans
+pdf.fonttype: 42
+ps.fonttype: 42
+svg.fonttype: none
+
+##### Color cycle (high-contrast on dark, still colorblind-aware)
+# cyan, warm red, yellow, green, violet, sky, rose, light gray
+axes.prop_cycle: cycler('color', ['6FDBFF','FF6B6B','FFD166','06D6A0','C792EA','56B1F7','F29EBA','C7CED6'])
+
+##### Lines/markers
+lines.linewidth: 1.7
+lines.markersize: 4.8
+lines.solid_capstyle: round
+lines.solid_joinstyle: round
+lines.antialiased: True
+
+##### Ticks
+xtick.direction: in
+ytick.direction: in
+xtick.major.size: 4
+ytick.major.size: 4
+xtick.major.width: 0.9
+ytick.major.width: 0.9
+xtick.minor.visible: True
+ytick.minor.visible: True
+xtick.minor.size: 2.5
+ytick.minor.size: 2.5
+xtick.color: DDE3EA
+ytick.color: DDE3EA
+xtick.top: True
+ytick.right: True
+
+##### Grid (subtle glow)
+axes.grid: True
+grid.color: E8EEF5
+grid.alpha: 0.15
+grid.linestyle: -
+grid.linewidth: 0.7
+
+##### Legend
+legend.frameon: False
+legend.fontsize: 9.5
+legend.title_fontsize: 10.5
+legend.borderaxespad: 0.6
+legend.handlelength: 1.6
+
+##### Images (microscopy-friendly)
+image.cmap: magma
+image.interpolation: nearest
+image.resample: True
+image.origin: upper
+
+##### Errorbars & boxes
+errorbar.capsize: 2.0
+boxplot.flierprops.marker: o
+boxplot.flierprops.markerfacecolor: none
+boxplot.flierprops.markeredgewidth: 0.9
+
+##### Saving/exports
+savefig.dpi: 300
+savefig.facecolor: 0B0F14
+savefig.edgecolor: 0B0F14
+axes.formatter.limits: -3, 4

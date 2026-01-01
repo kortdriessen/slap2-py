@@ -9,7 +9,10 @@ from . import (
     gen as gen,
 )
 from . import (
-    hfive as hfive,
+    syn as syn,
+)
+from . import (
+    movie as movie,
 )
 
-__all__ = ["drec", "gen", "hfive"]
+__all__ = ["drec", "gen", "syn", "movie"]

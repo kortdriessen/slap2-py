@@ -298,3 +298,52 @@ def load_f0_full_helper(esum_path: str) -> Dict[int, np.ndarray]:
         np.concatenate(f0[2], axis=1), (0, 2, 1)
     )  # gets us (channel, source, timepoint)
     return fzero
+
+
+def load_single_trace_type(
+    esum_path: str, group="dF", ttype="matchFilt"
+) -> Dict[int, List[Any]]:
+    """ """
+
+    traces: Dict[int, List[Any]] = {}
+    with MatV73Reader(esum_path) as r:
+        # Access the cell array once; shape is typically (n_dmd, n_trials)
+        E = r._f["/exptSummary/E"]
+        shape = getattr(E, "shape", None)
+        if not shape or len(shape) < 2:
+            return None  # type: ignore
+
+        n_dmd, n_trials = shape[0], shape[1]
+        chosen_dmds = [d for d in (1, 2) if 0 <= (d - 1) < n_dmd]
+        for dmd in chosen_dmds:
+            traces[dmd] = [None] * n_trials  # type: ignore[list-item]
+
+        # Directly dereference each cell and read only the 'F0' dataset
+        for dmd in chosen_dmds:
+            di = dmd - 1
+            trial_shape = get_trial_shape(
+                esum_path,
+                dmd=dmd,
+            )
+            for trial in range(n_trials):
+                try:
+                    ref = E[di, trial]  # type: ignore
+                    grp = r._f[ref]
+                    # Access only the trace group dataset within this struct
+                    if group in getattr(grp, "keys", lambda: [])():
+                        ds = grp[f"{group}"][f"{ttype}"]  # type: ignore
+                        trace = ds[...]  # type: ignore
+                    else:
+                        # Rare case: fallback to generic loader
+                        trace = spy.hf.load_any(
+                            esum_path,
+                            f"/exptSummary/E[{di}][{trial}]['{group}']['{ttype}']",
+                        )
+                except Exception:
+                    # Conservative fallback on any unexpected shape/structure
+                    # here the fallback should just be to append a nan array with the
+                    # appropriate shape as a placeholder
+                    print(trial, "fallback to NaN array")
+                    trace = np.full(trial_shape, np.nan)
+                traces[dmd][trial] = trace
+    return traces

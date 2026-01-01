@@ -1,5 +1,5 @@
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 from matplotlib.collections import LineCollection
 
 
@@ -9,28 +9,29 @@ def plot_synaptic_traces(
     *,
     tlim: tuple[float, float] | None = None,
     # preprocessing
-    normalize: str = "dff",          # "none" | "dff" | "zscore"
-    f0_percentile: float = 10.0,     # for dF/F0, per-trace F0 = percentile
-    smooth_win_s: float | None = 0.0,# moving-average window (seconds); 0/None = off
+    normalize: str = "dff",  # "none" | "dff" | "zscore"
+    f0_percentile: float = 10.0,  # for dF/F0, per-trace F0 = percentile
+    smooth_win_s: float | None = 0.0,  # moving-average window (seconds); 0/None = off
     clip_quantiles: tuple[float, float] | None = (0.5, 99.5),  # robust clipping
-    max_points: int = 5000,          # decimate for speed if extremely long
+    max_points: int = 5000,  # decimate for speed if extremely long
     # stacking/appearance
-    vertical_spacing: float | None = None,   # if None, auto from data
+    vertical_spacing: float | None = None,  # if None, auto from data
     trace_height_frac: float = 0.8,  # fraction of spacing a trace occupies
     per_trace_scaling: bool = True,  # scale each trace to fill trace_height
     sort_by_activity: bool = False,  # sort by robust std (descending)
-    line_color: str = "#22bf1f",     # green
-    linewidth: float = 0.6,
+    line_color: str = "#22bf1f",  # green
+    colors: list | np.ndarray | None = None,  # RGBA per trace; overrides line_color
+    linewidth: float | None = None,  # None = auto-scale based on figure size
     alpha: float = 1.0,
-    antialiased: bool = True,
+    antialiased: bool = False,  # False for crisp lines on dark backgrounds
     # optional overlay of "active" segments (thicker/darker)
-    active_mask: np.ndarray | None = None,   # bool (n_synapses, n_timepoints)
+    active_mask: np.ndarray | None = None,  # bool (n_synapses, n_timepoints)
     active_linewidth: float = 1.0,
-    active_color: str | None = None,         # None -> same as line_color
+    active_color: str | None = None,  # None -> same as line_color
     # figure/axes
     figsize: tuple[float, float] = (6.0, 6.0),
     dpi: int = 300,
-    background: str = "white",
+    background: str = "black",
 ):
     """
     Return (fig, ax).
@@ -43,6 +44,9 @@ def plot_synaptic_traces(
     - `vertical_spacing=None` chooses spacing based on robust amplitude across traces.
     - `active_mask` (optional) can highlight segments (e.g., detected events)
       with a thicker overlay line.
+    - `colors` (optional) list/array of RGBA values with length matching
+      traces.shape[0]. Each trace will be drawn with its corresponding color.
+      If provided, overrides `line_color`.
     """
     if traces.ndim != 2:
         raise ValueError("`traces` must be 2D: (n_synapses, n_timepoints).")
@@ -132,15 +136,15 @@ def plot_synaptic_traces(
     # Compute scaling & offsets -----------------------------------------------
     # How tall should a trace be relative to spacing?
     if per_trace_scaling:
-        robust_amp = (np.nanpercentile(Yp, 97.5, axis=1) -
-                      np.nanpercentile(Yp, 2.5, axis=1))
+        robust_amp = np.nanpercentile(Yp, 97.5, axis=1) - np.nanpercentile(
+            Yp, 2.5, axis=1
+        )
         robust_amp[~np.isfinite(robust_amp) | (robust_amp <= 0)] = 1.0
         # We will scale each trace so this robust range == trace_height.
         # trace_height determined below when spacing is known.
     else:
         # single global amplitude for all traces
-        robust_amp_all = (np.nanpercentile(Yp, 97.5) -
-                          np.nanpercentile(Yp, 2.5))
+        robust_amp_all = np.nanpercentile(Yp, 97.5) - np.nanpercentile(Yp, 2.5)
         if not np.isfinite(robust_amp_all) or robust_amp_all <= 0:
             robust_amp_all = 1.0
         robust_amp = np.full(n_traces, robust_amp_all)
@@ -165,15 +169,36 @@ def plot_synaptic_traces(
     offsets = np.arange(n_traces)[::-1] * vertical_spacing
     Yplot = Ys + offsets[:, None]
 
+    # Prepare per-trace colors ------------------------------------------------
+    if colors is not None:
+        colors = np.asarray(colors)
+        if colors.shape[0] != n_traces:
+            raise ValueError(
+                f"`colors` length ({colors.shape[0]}) must match number of traces ({n_traces})."
+            )
+        # Reorder colors if traces were sorted by activity
+        trace_colors = colors[order]
+    else:
+        trace_colors = line_color  # single color for all traces
+
     # Prepare figure/axes ------------------------------------------------------
     fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+    fig.set_facecolor(background)
     ax.set_facecolor(background)
+
+    # Auto-scale linewidth based on figure size for consistent visual weight
+    if linewidth is None:
+        # Scale linewidth so traces appear equally bold regardless of figure size
+        # Base: 0.8pt for a 6x6 figure. Scale proportionally with figure height.
+        base_lw = 0.8
+        height_ratio = figsize[1] / 6.0
+        linewidth = base_lw * height_ratio
 
     # Base traces via LineCollection (fast & crisp)
     segs = [np.column_stack((T, Yplot[i])) for i in range(n_traces)]
     lc = LineCollection(
         segs,
-        colors=line_color if active_mask is None else line_color,
+        colors=trace_colors,
         linewidths=linewidth,
         antialiased=antialiased,
         alpha=alpha,
@@ -202,7 +227,7 @@ def plot_synaptic_traces(
             cuts = np.where(np.diff(idx) > 1)[0]
             starts = np.r_[idx[0], idx[cuts + 1]]
             ends = np.r_[idx[cuts], idx[-1]]
-            for s, e in zip(starts, ends):
+            for s, e in zip(starts, ends, strict=False):
                 # include end+1 so segment reaches the last True sample
                 sl = slice(s, e + 1)
                 act_segs.append(np.column_stack((T[sl], Yplot[i, sl])))

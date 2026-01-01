@@ -161,12 +161,16 @@ class ExSum:
             for src in range(n_sources):
                 traces_ch1 = []
                 traces_ch2 = []
+                noise_ch1 = []
+                noise_ch2 = []
                 for trl in range(n_trials):
                     if self.data["E"][trl][dmd - 1] is None:
                         print(f"trl {trl} is DEAD on DMD {dmd}, appending nan array")
-                        nan_array = np.ones_like(traces_ch1) * np.nan
+                        nan_array = np.ones_like(traces_ch1[-1]) * np.nan
                         traces_ch1.append(nan_array)
                         traces_ch2.append(nan_array)
+                        noise_ch1.append(nan_array)
+                        noise_ch2.append(nan_array)
                         continue
                     traces_ch1.append(
                         self.data["E"][trl][dmd - 1][trace_group]["ls"][
@@ -178,14 +182,27 @@ class ExSum:
                             src, :, 0
                         ]  # note the flipping of channel order here!! When activityChannel is set to 1, then it gets assigned as 2 here
                     )
+                    var_noise = float(
+                        self.data["E"][trl][dmd - 1]["noiseEst"][trace_group]["ls"][src]
+                    )
+                    noise = np.sqrt(var_noise)
+                    # create a noise array with the same shape as the traces
+                    noise_array1 = np.zeros_like(traces_ch1[-1])
+                    noise_array2 = np.ones_like(traces_ch1[-1]) * noise
+                    noise_ch1.append(noise_array1)
+                    noise_ch2.append(noise_array2)
+
                 traces_ch1 = np.concatenate(traces_ch1)
                 traces_ch2 = np.concatenate(traces_ch2)
+                noise_ch1 = np.concatenate(noise_ch1)
+                noise_ch2 = np.concatenate(noise_ch2)
                 traces_t = np.arange(len(traces_ch1)) / self.fs
                 ls_df1 = pl.DataFrame(
                     {
                         "time": traces_t,
                         "data": traces_ch1,
                         "dmd": dmd,
+                        "noise": noise_ch1,
                         "source": src,
                         "trace_group": trace_group,
                         "trace_type": "ls",
@@ -198,6 +215,7 @@ class ExSum:
                         "time": traces_t,
                         "data": traces_ch2,
                         "dmd": dmd,
+                        "noise": noise_ch2,
                         "source": src,
                         "trace_group": trace_group,
                         "trace_type": "ls",
@@ -230,7 +248,7 @@ class ExSum:
             on both DMDs, for any specified group of trace types.
         """
         if to_pull is None:
-            to_pull = ["matchFilt", "denoised", "events"]
+            to_pull = ["ls", "matchFilt", "denoised", "events", "nonneg"]
         fs = self.data["params"]["analyzeHz"]
         syndfs = []
         n_trials = len(self.data["E"])
@@ -238,31 +256,50 @@ class ExSum:
             n_sources = self.data["E"][0][dmd - 1]["F0"].shape[0]
             for trace_type in to_pull:
                 if trace_type == "ls":
-                    lsdf = self.gen_ls_df(trace_group)
-                    syndfs.append(lsdf)
-                    continue
+                    if trace_group == "dFF":
+                        print(f"Skipping ls for dFF")
+                        continue
+                    else:
+                        lsdf = self.gen_ls_df(trace_group)
+                        syndfs.append(lsdf)
+                        continue
                 for src in range(n_sources):
                     traces_list = []
+                    noise_list = []
                     for trl in range(n_trials):
                         if self.data["E"][trl][dmd - 1] is None:
                             print(
-                                f"trl {trl} is DEAD on DMD {dmd}, appending nan array"
+                                f"trl {trl} is DEAD on DMD {dmd}, appending nan array ({trace_type})"
                             )
                             nan_array = np.ones_like(traces) * np.nan
                             traces_list.append(nan_array)
+                            noise_list.append(nan_array)
                             continue
                         traces = self.data["E"][trl][dmd - 1][trace_group][trace_type][
                             src, :
                         ]
+
+                        var_noise = float(
+                            self.data["E"][trl][dmd - 1]["noiseEst"][trace_group][
+                                trace_type
+                            ][src]
+                        )
+                        noise = np.sqrt(var_noise)
+                        # create a noise array with the same shape as the traces
+                        noise_array = np.ones_like(traces) * noise
                         traces_list.append(traces)
+                        noise_list.append(noise_array)
                     traces_full = np.concatenate(traces_list)
+                    noise_full = np.concatenate(noise_list)
                     traces_full = traces_full.flatten()
+                    noise_full = noise_full.flatten()
                     traces_t = np.arange(len(traces_full)) / fs
                     syndf = pl.DataFrame(
                         {
                             "time": traces_t,
                             "data": traces_full,
                             "dmd": dmd,
+                            "noise": noise_full,
                             "source": src,
                             "trace_group": trace_group,
                             "trace_type": trace_type,
@@ -271,6 +308,60 @@ class ExSum:
                     )
                     syndfs.append(syndf)
         return pl.concat(syndfs)
+
+    def gen_f0_df(self):
+        ls_dfs = []
+        n_trials = len(self.data["E"])
+        for dmd in [1, 2]:
+            n_sources = self.data["E"][0][dmd - 1]["F0"].shape[0]
+            for src in range(n_sources):
+                traces_ch1 = []
+                traces_ch2 = []
+                for trl in range(n_trials):
+                    if self.data["E"][trl][dmd - 1] is None:
+                        print(f"trl {trl} is DEAD on DMD {dmd}, appending nan array")
+                        nan_array = np.ones_like(traces_ch1[-1]) * np.nan
+                        traces_ch1.append(nan_array)
+                        traces_ch2.append(nan_array)
+                        continue
+                    traces_ch1.append(
+                        self.data["E"][trl][dmd - 1]["F0"][
+                            src, :, 1
+                        ]  # note the flipping of channel order here!! When activityChannel is set to 2, then it gets assigned as 1 here
+                    )
+                    traces_ch2.append(
+                        self.data["E"][trl][dmd - 1]["F0"][
+                            src, :, 0
+                        ]  # note the flipping of channel order here!! When activityChannel is set to 1, then it gets assigned as 2 here
+                    )
+
+                traces_ch1 = np.concatenate(traces_ch1)
+                traces_ch2 = np.concatenate(traces_ch2)
+                traces_t = np.arange(len(traces_ch1)) / self.fs
+                ls_df1 = pl.DataFrame(
+                    {
+                        "time": traces_t,
+                        "data": traces_ch1,
+                        "dmd": dmd,
+                        "source": src,
+                        "trace_type": "F0",
+                        "channel": 1,
+                    }
+                )
+
+                ls_df2 = pl.DataFrame(
+                    {
+                        "time": traces_t,
+                        "data": traces_ch2,
+                        "dmd": dmd,
+                        "source": src,
+                        "trace_type": "F0",
+                        "channel": 2,
+                    }
+                )
+                ls_dfs.append(ls_df1)
+                ls_dfs.append(ls_df2)
+        return pl.concat(ls_dfs)
 
 
 # ---------------------- Utility Functions ----------------------

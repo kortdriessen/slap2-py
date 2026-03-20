@@ -124,7 +124,7 @@ def synapse_id_plot(
     r0, c0, h, w = spy.img.utils.find_empty_rectangle(mean_im)
 
     # get the source's footprint overlay
-    fp = fps[dmd][source_number, :, :]
+    fp = fps[dmd][source_number]
     non_nan_indices = np.where(fp > 0)
     ymin, ymax = np.min(non_nan_indices[0]), np.max(non_nan_indices[0])
     xmin, xmax = np.min(non_nan_indices[1]), np.max(non_nan_indices[1])

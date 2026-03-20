@@ -1,6 +1,11 @@
+from __future__ import annotations
+
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.axes import Axes
 from matplotlib.collections import LineCollection
+from matplotlib.colors import LogNorm
+from matplotlib.figure import Figure
 
 
 def plot_synaptic_traces(
@@ -19,7 +24,7 @@ def plot_synaptic_traces(
     trace_height_frac: float = 0.8,  # fraction of spacing a trace occupies
     per_trace_scaling: bool = True,  # scale each trace to fill trace_height
     sort_by_activity: bool = False,  # sort by robust std (descending)
-    line_color: str = "#22bf1f",  # green
+    line_color: str = "#40a656",
     colors: list | np.ndarray | None = None,  # RGBA per trace; overrides line_color
     linewidth: float | None = None,  # None = auto-scale based on figure size
     alpha: float = 1.0,
@@ -210,7 +215,7 @@ def plot_synaptic_traces(
     # Optional "active" overlay -----------------------------------------------
     if active_mask is not None:
         if active_color is None:
-            active_color = "#0b1c2f"  # deep navy/black-ish overlay
+            active_color = "#006400"  # deep navy/black-ish overlay
         act_segs = []
         for i in range(n_traces):
             m = active_mask[i]
@@ -258,3 +263,108 @@ def plot_synaptic_traces(
     fig.tight_layout(pad=0.1)
 
     return fig, ax
+
+
+def plot_mean_im_with_footprints(
+    esum_path: str,
+    dmd: int = 1,
+    *,
+    fp_cmap: str = "summer",
+    fp_alpha: float = 0.8,
+    im_vmin: float = 5,
+    im_percentile_max: float = 97,
+    scale_bar_um: float = 10,
+    um_per_px: float = 0.25,
+    figsize: tuple[float, float] = (10, 10),
+    buf: int = 5,
+) -> tuple[Figure, Axes]:
+    """Plot mean image with footprint overlay for a given DMD.
+
+    Parameters
+    ----------
+    esum_path : str
+        Path to an ExperimentSummary .mat file.
+    dmd : int
+        Which DMD to plot (1 or 2).
+    fp_cmap : str
+        Colormap for the footprint overlay.
+    fp_alpha : float
+        Alpha for the footprint overlay.
+    im_vmin : float
+        Minimum value for the LogNorm of the mean image.
+    im_percentile_max : float
+        Percentile used to compute vmax for the mean image.
+    scale_bar_um : float
+        Length of the scale bar in microns.
+    um_per_px : float
+        Microns per pixel (used for scale bar).
+    figsize : tuple[float, float]
+        Figure size.
+    buf : int
+        Pixel buffer around the valid (non-NaN) region.
+
+    Returns
+    -------
+    tuple[Figure, Axes]
+        The matplotlib Figure and Axes.
+    """
+    from slap2_py.core.xsum import get_fp_info, get_meanIM
+
+    mim = get_meanIM(esum_path)
+    _, fpvals = get_fp_info(esum_path)
+
+    mim2 = mim[dmd][1].copy()
+    fpv = fpvals[dmd]
+
+    img_data = mim2[:, :720]
+    fpv_cropped = fpv[:, :720] if fpv.shape[1] > 720 else fpv
+
+    vmax = np.nanpercentile(img_data, im_percentile_max)
+
+    f, ax = plt.subplots(1, 1, figsize=figsize)
+    ax.imshow(img_data, norm=LogNorm(vmin=im_vmin, vmax=vmax), cmap="gray")
+    ax.imshow(fpv_cropped, cmap=fp_cmap, alpha=fp_alpha)
+
+    # Crop axes to bounding box of non-NaN pixels with buffer
+    valid = ~np.isnan(img_data)
+    rows = np.any(valid, axis=1)
+    cols = np.any(valid, axis=0)
+    rmin, rmax = np.where(rows)[0][[0, -1]]
+    cmin, cmax = np.where(cols)[0][[0, -1]]
+    rmin = max(0, rmin - buf)
+    rmax = min(img_data.shape[0] - 1, rmax + buf)
+    cmin = max(0, cmin - buf)
+    cmax = min(img_data.shape[1] - 1, cmax + buf)
+    ax.set_xlim(cmin, cmax)
+    ax.set_ylim(rmax, rmin)
+
+    # Ticks on edges only, no labels
+    ax.set_xticks([cmin, cmax])
+    ax.set_yticks([rmin, rmax])
+    ax.tick_params(
+        top=False,
+        right=False,
+        bottom=False,
+        left=False,
+        labeltop=False,
+        labelright=False,
+        labelbottom=False,
+        labelleft=False,
+    )
+
+    # Scale bar
+    bar_length_px = scale_bar_um / um_per_px
+    bar_x = cmax - bar_length_px - 10
+    bar_y = rmax - 10
+    ax.plot([bar_x, bar_x + bar_length_px], [bar_y, bar_y], color="black", linewidth=2)
+    ax.text(
+        bar_x + bar_length_px / 2,
+        bar_y - 5,
+        f"{scale_bar_um:.0f} µm",
+        color="black",
+        ha="center",
+        va="bottom",
+        fontsize=10,
+    )
+
+    return f, ax

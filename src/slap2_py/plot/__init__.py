@@ -3,19 +3,17 @@ subpackage for plotting functions
 """
 
 from . import (
-    images as images,
+    ev as ev,
 )
 from . import (
-    style as style,
+    images as images,
 )
 from . import (
     main as main,
 )
 from . import (
-    activity as activity,
+    style as style,
 )
-
 from .style import slap_style
 
-
-__all__ = ["images", "style", "slap_style", "main", "activity"]
+__all__ = ["images", "style", "slap_style", "main", "ev"]

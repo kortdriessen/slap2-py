@@ -5,10 +5,11 @@
 # ===============================================
 
 
-import numpy as np
+from collections.abc import Sequence
+
 import matplotlib.pyplot as plt
+import numpy as np
 from matplotlib.colors import TwoSlopeNorm
-from typing import Sequence, Optional, Tuple, Dict, Literal, Union
 
 
 def plot_timeseries_raster(
@@ -19,25 +20,25 @@ def plot_timeseries_raster(
     cmap: str = "bwr",
     vcenter: float = 1.0,
     robust: bool = True,
-    q: Tuple[float, float] = (0.01, 0.99),  # robust percentiles
+    q: tuple[float, float] = (0.01, 0.99),  # robust percentiles
     gap: float = 0.05,  # vertical gap between rows (in “row-height” units)
     row_height: float = 1.0,  # actual bar height (controls overall plot height)
-    gap_indices: Optional[Union[Sequence[int], Dict[int, int]]] = None,
+    gap_indices: Sequence[int] | dict[int, int] | None = None,
     show_colorbar: bool = False,
-    labels: Optional[Sequence[str]] = None,
+    labels: Sequence[str] | None = None,
     hide_yticks: bool = True,
     # axes management
-    ax: Optional[plt.Axes] = None,  # bars axis (optional)
+    ax: plt.Axes | None = None,  # bars axis (optional)
     tight: bool = True,
     # NEW: optional line panel above
-    line_series: Optional[Union[np.ndarray, Sequence[np.ndarray]]] = None,
+    line_series: np.ndarray | Sequence[np.ndarray] | None = None,
     line_height_ratio: float = 0.28,  # relative height of line panel vs bars panel
-    line_kwargs: Optional[dict] = None,  # passed to ax_line.plot(...)
+    line_kwargs: dict | None = None,  # passed to ax_line.plot(...)
     # NEW: optional per-chunk line panels (above each chunk)
-    chunked_line_arrays: Optional[Sequence[np.ndarray]] = None,
+    chunked_line_arrays: Sequence[np.ndarray] | None = None,
     chunk_line_height_ratio: float = 0.1,  # min height of each chunk line axis vs bars axis
-    line_labels: Optional[Sequence[str]] = None,  # labels for each chunk line plot
-) -> Dict[str, object]:
+    line_labels: Sequence[str] | None = None,  # labels for each chunk line plot
+) -> dict[str, object]:
     """
     Plot a list of time series as a compact raster (one strip per series) using pcolormesh,
     with color centered at vcenter (default=1.0) in the 'bwr' colormap.
@@ -128,7 +129,7 @@ def plot_timeseries_raster(
     orig_N = data.shape[0]
 
     # ---------- expand rows by inserting blank spacers after requested indices ----------
-    counts_map: Dict[int, int] = {}
+    counts_map: dict[int, int] = {}
     if gap_indices is not None:
         if isinstance(gap_indices, dict):
             counts_map = {int(k): int(v) for k, v in gap_indices.items()}
@@ -144,9 +145,9 @@ def plot_timeseries_raster(
             expanded_rows.append(data[i])
             num_blanks = counts_map.get(i, 0)
             if num_blanks:
-                expanded_rows.extend(
-                    [np.full((T,), np.nan, dtype=float) for _ in range(num_blanks)]
-                )
+                expanded_rows.extend([
+                    np.full((T,), np.nan, dtype=float) for _ in range(num_blanks)
+                ])
         data = np.vstack(expanded_rows)
 
     N = data.shape[0]
@@ -202,12 +203,12 @@ def plot_timeseries_raster(
     # ---------- determine chunks and validate chunked_line_arrays ----------
     # Identify blank rows (inserted spacers) to split chunks
     is_blank_row = np.all(~np.isfinite(data), axis=1)
-    chunks: list[Tuple[int, int]] = (
-        []
-    )  # (start_row_idx, end_row_idx) inclusive, in expanded data
-    gaps_after: list[Tuple[int, int]] = (
-        []
-    )  # for each chunk except last: (gap_start_row, gap_len)
+    chunks: list[
+        tuple[int, int]
+    ] = []  # (start_row_idx, end_row_idx) inclusive, in expanded data
+    gaps_after: list[
+        tuple[int, int]
+    ] = []  # for each chunk except last: (gap_start_row, gap_len)
     i_row = 0
     while i_row < N:
         # skip any leading blanks (robustness)
@@ -230,11 +231,11 @@ def plot_timeseries_raster(
             gaps_after.append((gap_start, gap_len))
     num_chunks = len(chunks)
 
-    chunk_line_axes: Optional[list[plt.Axes]] = None
+    chunk_line_axes: list[plt.Axes] | None = None
 
     # Prepare optional global line arrays (top panels) and optional per-chunk arrays
     ax_lines = None
-    line_arrays: Optional[Sequence[np.ndarray]] = None
+    line_arrays: Sequence[np.ndarray] | None = None
     if line_series is not None:
         if isinstance(line_series, np.ndarray):
             arr = np.asarray(line_series, dtype=float)
@@ -255,7 +256,7 @@ def plot_timeseries_raster(
                 "line_series must be a 1D array or a list/tuple of 1D arrays."
             )
 
-    chunk_arrays: Optional[list[np.ndarray]] = None
+    chunk_arrays: list[np.ndarray] | None = None
     if chunked_line_arrays is not None:
         if not isinstance(chunked_line_arrays, (list, tuple)):
             raise ValueError("chunked_line_arrays must be a list/tuple of 1D arrays.")
@@ -377,7 +378,7 @@ def plot_timeseries_raster(
     ax.invert_yaxis()
     ax.set_xlim(time_edges[0], time_edges[-1])  # explicit for shared x alignment
 
-    labels_expanded: Optional[Sequence[str]] = None
+    labels_expanded: Sequence[str] | None = None
     if labels is not None:
         if len(labels) == orig_N:
             # Expand labels to account for inserted blank rows

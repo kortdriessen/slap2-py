@@ -3,6 +3,9 @@ Utils for working with SLAP2 data
 """
 
 from . import (
+    datfile as datfile,
+)
+from . import (
     drec as drec,
 )
 from . import (
@@ -15,4 +18,4 @@ from . import (
     movie as movie,
 )
 
-__all__ = ["drec", "gen", "syn", "movie"]
+__all__ = ["datfile", "drec", "gen", "syn", "movie"]

@@ -243,7 +243,42 @@ def get_exsum_basics(
     return data, ntrials, fs
 
 
+def _load_trial_epochs(exsum_path: Path | str) -> np.ndarray:
+    """Load ``trialTable.epoch`` from an ExSum as a 1-D int array.
+
+    Every ExSum (single- or multi-epoch) has this column. Single-epoch
+    acqs always have all-ones. Multi-epoch acqs have values 1..n_epochs.
+    """
+    from slap2_py.hf import load_any
+
+    ep = load_any(exsum_path, "/exptSummary/trialTable['epoch']")
+    ep = np.asarray(ep).squeeze().astype(int, copy=False)
+    if ep.ndim == 0:
+        ep = ep.reshape(1)
+    assert ep.ndim == 1, f"trialTable.epoch expected 1-D, got shape {ep.shape}"
+    assert ep.size > 0 and int(ep.min()) >= 1, (
+        f"trialTable.epoch must be non-empty and 1-indexed; got min={ep.min()}"
+    )
+    return ep
+
+
 def read_full_trial_data_dict(exsum_path):
+    """Read all per-trial data from an ExSum.
+
+    Returns
+    -------
+    trial_data : dict
+        ``{dmd: {trial_idx: trial_dict | "BAD_TRIAL"}}`` for DMDs 1 and 2.
+    data : dict
+        The full parsed ExSum top-level struct (``exptSummary``).
+    fs : int
+        Sampling rate in Hz.
+    ntrials : int
+        Number of trials.
+    trial_epochs : np.ndarray
+        1-D int array, length ``ntrials``, mapping each trial to its epoch
+        index (1..n_epochs). For single-epoch acqs this is all ones.
+    """
     data, ntrials, fs = get_exsum_basics(exsum_path)
     ntrials = data["E"].shape[1]
 
@@ -269,7 +304,11 @@ def read_full_trial_data_dict(exsum_path):
                 trial_data[dmd][trl] = "BAD_TRIAL"
                 continue
     fs = int(data["params"]["analyzeHz"][0][0])
-    return trial_data, data, fs, ntrials
+    trial_epochs = _load_trial_epochs(exsum_path)
+    assert len(trial_epochs) == ntrials, (
+        f"trialTable.epoch has {len(trial_epochs)} entries but E has {ntrials} trials"
+    )
+    return trial_data, data, fs, ntrials, trial_epochs
 
 
 def create_null_trial_data(clean):
@@ -296,66 +335,185 @@ def create_null_trial_data(clean):
     return null_data
 
 
-def assert_shape_match(clean, comparison_data):
+# Time axis (within each per-trial array) by top-level key in the SLAP2
+# ExSum format. Multi-epoch acqs legitimately vary along this axis — both
+# between epochs and (rarely, in the final trial of an epoch) within an
+# epoch when the microscope ended a frame early. When
+# ``ignore_time_axis_variation=True`` is passed to shape-check helpers,
+# comparison drops this axis and catches only genuine corruption
+# (wrong channels / synapses / ROIs).
+_TIME_AXIS_BY_TOP_KEY: dict[str, int] = {
+    "dF": 1,  # shape (channels, time, synapses) for sub-keys ls/denoised/events
+    "F0": 1,  # shape (channels, time, synapses)
+    "ROIs": 0,  # shape (time, channels, somas); currently skipped anyway
+    "noiseEst": 1,  # nested under dF/F0 sub-keys, same layout
+}
+
+
+def _shape_for_compare(arr_shape, top_key, ignore_time_axis):
+    if not ignore_time_axis:
+        return tuple(arr_shape)
+    ax = _TIME_AXIS_BY_TOP_KEY.get(top_key)
+    if ax is None:
+        return tuple(arr_shape)
+    return tuple(s for i, s in enumerate(arr_shape) if i != ax)
+
+
+def assert_shape_match(clean, comparison_data, ignore_time_axis_variation=False):
+    """Assert two trial dicts have matching shapes.
+
+    - ``ignore_time_axis_variation=False`` (single-epoch default): strict
+      full-shape equality across every np.ndarray in the trial dict.
+    - ``ignore_time_axis_variation=True`` (multi-epoch): only validates
+      the non-time dims of keys in ``_TIME_AXIS_BY_TOP_KEY``. Other keys
+      (e.g. ``discardFrames``, ``global``, ``footprints``) are skipped
+      because their time-axis convention isn't standardized and we don't
+      consume them in the scopex builders. This catches genuine
+      corruption (wrong channel/synapse/soma counts on the saved traces)
+      without tripping on benign time-length variation.
+    """
     for key in clean.keys():
         if "ROI" in key:  # TODO: Fix this immedidately!!! Hack!
             continue
+        if ignore_time_axis_variation and key not in _TIME_AXIS_BY_TOP_KEY:
+            continue
         if type(clean[key]) is np.ndarray:
-            assert comparison_data[key].shape == clean[key].shape, (
+            cs = _shape_for_compare(
+                comparison_data[key].shape, key, ignore_time_axis_variation
+            )
+            clean_s = _shape_for_compare(
+                clean[key].shape, key, ignore_time_axis_variation
+            )
+            assert cs == clean_s, (
                 f"Shape mismatch for {key}: {comparison_data[key].shape} vs {clean[key].shape}"
             )
         elif type(clean[key]) is dict:
             for subkey in clean[key].keys():
                 if type(clean[key][subkey]) is np.ndarray:
-                    assert (
-                        comparison_data[key][subkey].shape == clean[key][subkey].shape
-                    ), (
+                    cs = _shape_for_compare(
+                        comparison_data[key][subkey].shape,
+                        key,
+                        ignore_time_axis_variation,
+                    )
+                    clean_s = _shape_for_compare(
+                        clean[key][subkey].shape, key, ignore_time_axis_variation
+                    )
+                    assert cs == clean_s, (
                         f"Shape mismatch for {key}-{subkey}: {comparison_data[key][subkey].shape} vs {clean[key][subkey].shape}"
                     )
                 elif type(clean[key][subkey]) is dict:
                     for subsubkey in clean[key][subkey].keys():
                         if type(clean[key][subkey][subsubkey]) is np.ndarray:
-                            assert (
-                                comparison_data[key][subkey][subsubkey].shape
-                                == clean[key][subkey][subsubkey].shape
-                            ), (
+                            cs = _shape_for_compare(
+                                comparison_data[key][subkey][subsubkey].shape,
+                                key,
+                                ignore_time_axis_variation,
+                            )
+                            clean_s = _shape_for_compare(
+                                clean[key][subkey][subsubkey].shape,
+                                key,
+                                ignore_time_axis_variation,
+                            )
+                            assert cs == clean_s, (
                                 f"Shape mismatch for {key}-{subkey}-{subsubkey}: {comparison_data[key][subkey][subsubkey].shape} vs {clean[key][subkey][subsubkey].shape}"
                             )
 
 
-def get_clean_trial_dict(trial_data):
+def get_clean_trial_dict(trial_data, trial_epochs=None):
+    """Pick the first clean trial per DMD (or per (DMD, epoch) if
+    ``trial_epochs`` is provided).
+
+    Parameters
+    ----------
+    trial_data : dict
+        ``{dmd: {trial_idx: trial_dict | "BAD_TRIAL"}}``.
+    trial_epochs : np.ndarray | None
+        If given (1-D int array, length ntrials), return a nested dict
+        ``{dmd: {epoch: template}}`` picking the first clean trial per
+        ``(dmd, epoch)``. Needed for multi-epoch acqs where per-trial
+        shape can differ between epochs.
+
+    Returns
+    -------
+    dict
+        ``{dmd: template}`` when ``trial_epochs is None``;
+        ``{dmd: {epoch: template}}`` otherwise.
+    """
+    if trial_epochs is None:
+        clean_trials = {}
+        for dmd in trial_data.keys():
+            for trl in trial_data[dmd].keys():
+                if trial_data[dmd][trl] != "BAD_TRIAL":
+                    clean_trials[dmd] = trial_data[dmd][trl]
+                    break
+        return clean_trials
+
     clean_trials = {}
     for dmd in trial_data.keys():
-        for trl in trial_data[dmd].keys():
+        clean_trials[dmd] = {}
+        for trl, epoch in zip(
+            sorted(trial_data[dmd].keys()), trial_epochs, strict=True
+        ):
+            epoch_key = int(epoch)
+            if epoch_key in clean_trials[dmd]:
+                continue
             if trial_data[dmd][trl] != "BAD_TRIAL":
-                clean_trials[dmd] = trial_data[dmd][trl]
-                break
+                clean_trials[dmd][epoch_key] = trial_data[dmd][trl]
     return clean_trials
 
 
-def replace_bad_trials_with_null_data(trial_data, clean_trials):
+def _lookup_template(clean_trials, dmd, trl, trial_epochs):
+    """Resolve the clean-trial template for a given (dmd, trl), supporting
+    both flat and per-epoch nested shapes."""
+    if trial_epochs is None:
+        return clean_trials[dmd]
+    epoch_key = int(trial_epochs[trl])
+    return clean_trials[dmd][epoch_key]
+
+
+def replace_bad_trials_with_null_data(trial_data, clean_trials, trial_epochs=None):
+    """Replace every ``"BAD_TRIAL"`` entry with a NaN-filled template.
+
+    When ``trial_epochs`` is given, the template is the clean trial from
+    the same epoch as the bad trial (since per-trial shape can differ
+    between epochs in multi-epoch acqs).
+    """
     for dmd in trial_data.keys():
         for trl in trial_data[dmd].keys():
+            template = _lookup_template(clean_trials, dmd, trl, trial_epochs)
             if trial_data[dmd][trl] == "BAD_TRIAL":
-                trial_data[dmd][trl] = create_null_trial_data(clean_trials[dmd])
-            elif trial_data[dmd][trl].keys() != clean_trials[dmd].keys():
+                trial_data[dmd][trl] = create_null_trial_data(template)
+            elif trial_data[dmd][trl].keys() != template.keys():
                 print(
                     f"trial {dmd}-{trl} has different keys than clean trial, INVESTIGATE THIS!!"
                 )
-                trial_data[dmd][trl] = create_null_trial_data(clean_trials[dmd])
+                trial_data[dmd][trl] = create_null_trial_data(template)
     return trial_data
 
 
-def check_all_trial_shapes_match(trial_data, clean_trials):
+def check_all_trial_shapes_match(trial_data, clean_trials, trial_epochs=None):
+    """Assert every trial's arrays match its epoch's clean template.
+
+    For single-epoch acqs (``trial_epochs is None``): the classic strict
+    full-shape check across the whole DMD.
+
+    For multi-epoch acqs: time-axis length variation is allowed (both
+    between epochs and occasionally within an epoch when the microscope
+    ends a frame early). Only the non-time dims are compared. Genuine
+    corruption (wrong channels, synapses, ROIs) still fails.
+    """
+    ignore_time = trial_epochs is not None
     for dmd in trial_data.keys():
         for trl in trial_data[dmd].keys():
             if trial_data[dmd][trl] == "BAD_TRIAL":
                 raise ValueError(
                     f"NO TRIALS SHOULD BE BAD HERE, DMD {dmd}, TRIAL {trl}"
                 )
-            else:
-                assert_shape_match(clean_trials[dmd], trial_data[dmd][trl])
-    print("all trial shapes match")
+            template = _lookup_template(clean_trials, dmd, trl, trial_epochs)
+            assert_shape_match(
+                template, trial_data[dmd][trl], ignore_time_axis_variation=ignore_time
+            )
+    print("all trial shapes match (ignore_time_axis=%s)" % ignore_time)
     return
 
 
@@ -381,6 +539,21 @@ def get_meanIM(esum_p: str) -> dict:
     return mim
 
 
+def get_actIM(esum_p: str) -> dict[int, np.ndarray]:
+    """Load the per-DMD activity image from an ExSum.
+
+    Returns a dict keyed by 1-indexed DMD. Each value is a 2-D array already
+    transposed into display orientation (i.e. ready to pass straight to
+    ``imshow`` without a further ``.T``).
+    """
+    aim = {}
+    ref, nt, fs = get_exsum_basics(esum_p)
+    for dmd in [1, 2]:
+        actim = deref_h5_any(ref["actIM"][dmd - 1], esum_p)
+        aim[dmd] = np.asarray(actim).T
+    return aim
+
+
 def footprint_to_image(footprint_1d, sel_pix):
     """Map a single source's compressed footprint back to full image coordinates."""
     img = np.full(sel_pix.shape, np.nan)
@@ -388,7 +561,35 @@ def footprint_to_image(footprint_1d, sel_pix):
     return img
 
 
-def get_fp_info(esum_p: str, trial: int = 0) -> tuple[dict, dict]:
+def _load_fp_all_with_trial_fallback(
+    refdata: dict, dmd: int, trial: int, nt: int, esum_p: str
+) -> np.ndarray:
+    """Fetch ``E[dmd-1][trial]["footprints"]`` with fallback across trials.
+
+    Some trials are missing/invalid for a given DMD and raise ``IndexError``
+    when dereferenced. Try the requested trial first, then wrap through all
+    ``nt`` trials; only re-raise once every trial has failed.
+    """
+    last_err: IndexError | None = None
+    for offset in range(nt):
+        t = (trial + offset) % nt
+        try:
+            return deref_h5_any(refdata["E"][dmd - 1][t], esum_p)["footprints"]
+        except IndexError as e:
+            last_err = e
+            if t != trial:
+                continue
+            print(
+                f"[xsum] DMD {dmd}: trial {t} invalid for footprints, "
+                f"trying subsequent trials..."
+            )
+    assert last_err is not None
+    raise last_err
+
+
+def get_fp_info(
+    esum_p: str, trial: int = 0, threshold: float = 0.02
+) -> tuple[dict, dict]:
 
     refdata, nt, fs = get_exsum_basics(esum_p)
     synmaps = {}
@@ -396,11 +597,11 @@ def get_fp_info(esum_p: str, trial: int = 0) -> tuple[dict, dict]:
 
     for dmd in [1, 2]:
         sel_pix = deref_h5_any(refdata["selPix"][dmd - 1], esum_p)
-        fp_all = deref_h5_any(refdata["E"][dmd - 1][trial], esum_p)["footprints"]
+        fp_all = _load_fp_all_with_trial_fallback(refdata, dmd, trial, nt, esum_p)
         fpims = []
         for src in range(fp_all.shape[0]):
             fpim = footprint_to_image(fp_all[src], sel_pix)
-            fpim[fpim < 0.02] = np.nan
+            fpim[fpim < threshold] = np.nan
             fpim[~np.isnan(fpim)] = int(src + 1)
             fpims.append(fpim.T)
         fp = np.stack(fpims)
@@ -410,7 +611,7 @@ def get_fp_info(esum_p: str, trial: int = 0) -> tuple[dict, dict]:
         fpims = []
         for src in range(fp_all.shape[0]):
             fpim = footprint_to_image(fp_all[src], sel_pix)
-            fpim[fpim < 0.02] = np.nan
+            fpim[fpim < threshold] = np.nan
             fpims.append(fpim.T)
         fp = np.stack(fpims)
         fp_values = np.nanmax(fp, axis=0)
@@ -427,7 +628,7 @@ def get_raw_fp(esum_p: str, trial: int = 0) -> tuple[dict, dict]:
 
     for dmd in [1, 2]:
         sel_pix = deref_h5_any(refdata["selPix"][dmd - 1], esum_p)
-        fp_all = deref_h5_any(refdata["E"][dmd - 1][trial], esum_p)["footprints"]
+        fp_all = _load_fp_all_with_trial_fallback(refdata, dmd, trial, nt, esum_p)
         fpims = []
         for src in range(fp_all.shape[0]):
             fpim = footprint_to_image(fp_all[src], sel_pix)

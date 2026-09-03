@@ -171,13 +171,121 @@ def generate_scope_index_df(
         min_high_ms=min_high_ms,
         max_gap_ms=max_gap_ms,
     )
-    df = pd.DataFrame(
-        {
-            "start_idx": result.indices[:, 0],
-            "end_idx": result.indices[:, 1],
-            "start_time_s": result.times_s[:, 0],
-            "end_time_s": result.times_s[:, 1],
-            "duration_s": result.durations_s,
-        }
-    )
+    df = pd.DataFrame({
+        "start_idx": result.indices[:, 0],
+        "end_idx": result.indices[:, 1],
+        "start_time_s": result.times_s[:, 0],
+        "end_time_s": result.times_s[:, 1],
+        "duration_s": result.durations_s,
+    })
     return df
+
+
+# ---------------------------------------------------------------------------
+# Acquisition-signature detection on the SLAP2 acquiring-trigger line
+# ---------------------------------------------------------------------------
+def trigger_duty(
+    x: np.ndarray, fs: float = 5000.0, bin_s: float = 1.0
+) -> tuple[np.ndarray, np.ndarray, float]:
+    """Per-bin fraction of samples above half-scale for a TTL-like trigger line.
+
+    Returns ``(bin_start_idx, duty, half_scale)``. ``half_scale`` is the
+    midpoint of robust LOW/HIGH level estimates (0.5th / 99.5th percentiles,
+    falling back to min/max when those collapse). A flat signal yields empty
+    arrays.
+    """
+    x = np.asarray(x)
+    n_bin = int(round(bin_s * fs))
+    n = x.size // n_bin
+    lo, hi = np.percentile(x, [0.5, 99.5]) if x.size else (0.0, 0.0)
+    if hi <= lo and x.size:
+        lo, hi = float(np.min(x)), float(np.max(x))
+    half = 0.5 * (lo + hi)
+    if n == 0 or hi <= lo:
+        return np.array([], dtype=int), np.array([], dtype=float), float(half)
+    is_high = (x[: n * n_bin] > half).reshape(n, n_bin)
+    return np.arange(n) * n_bin, is_high.mean(axis=1), float(half)
+
+
+def _refine_step(is_high: np.ndarray, k0: int, w: int, rising: bool) -> int:
+    """Sample in ``[k0 - w, k0 + w)`` where a step in ``is_high`` is sharpest.
+
+    Maximises ``mean(is_high[k:k+w]) - mean(is_high[k-w:k])`` (negated for a
+    falling step): the matched-filter response of a step of width ``w``, which
+    peaks exactly at the step for a clean transition.
+    """
+    a = max(w, k0 - w)
+    b = min(is_high.size - w, k0 + w)
+    if b <= a:
+        return int(min(max(k0, 0), is_high.size))
+    seg = is_high[a - w : b + w].astype(np.int32)
+    cs = np.concatenate([[0], np.cumsum(seg)])
+    j = np.arange(a, b) - (a - w)
+    after = cs[j + w] - cs[j]
+    before = cs[j] - cs[j - w]
+    resp = (after - before) if rising else (before - after)
+    return int(a + np.argmax(resp))
+
+
+def generate_acq_segment_df(
+    x: np.ndarray,
+    fs: float = 5000.0,
+    bin_s: float = 1.0,
+    duty_min: float = 0.9,
+    min_duration_s: float = 10.0,
+) -> pd.DataFrame:
+    """Find *acquisition* segments of the SLAP2 acquiring-trigger line.
+
+    While the microscope is actually acquiring, the trigger line is high for
+    ~98-99.5 % of every second (brief dips at the trial structure). During
+    preview / live scanning it toggles slowly (duty ~0.2-0.8).
+    :func:`generate_scope_index_df`'s hysteresis treats both alike, so a
+    preview episode that runs straight into an acquisition is merged into one
+    scope-UP window whose start is NOT the acquisition start. This detector
+    instead returns runs of ``bin_s`` bins whose duty is >= ``duty_min`` and
+    that last >= ``min_duration_s``; each run's start and end are refined to
+    the sample with a step matched filter of width ``bin_s``.
+
+    Returns a DataFrame with the same columns as
+    :func:`generate_scope_index_df` (``start_idx, end_idx, start_time_s,
+    end_time_s, duration_s``); empty if no segment qualifies.
+    """
+    x = np.asarray(x)
+    bin_start, duty, half = trigger_duty(x, fs=fs, bin_s=bin_s)
+    n_bin = int(round(bin_s * fs))
+    if duty.size == 0:
+        return _empty_segment_df()
+    high = duty >= duty_min
+    edges = np.diff(np.concatenate([[0], high.astype(np.int8), [0]]))
+    run_starts = np.flatnonzero(edges == 1)
+    run_ends = np.flatnonzero(edges == -1)  # exclusive, in bins
+    min_bins = int(np.ceil(min_duration_s / bin_s))
+    is_high = x > half
+    bouts = []
+    for rs, re in zip(run_starts, run_ends, strict=True):
+        if re - rs < min_bins:
+            continue
+        start = _refine_step(is_high, int(rs * n_bin), n_bin, rising=True)
+        end = _refine_step(is_high, int(min(re * n_bin, x.size)), n_bin, rising=False)
+        end = max(end, start + 1)
+        bouts.append((start, end))
+    if not bouts:
+        return _empty_segment_df()
+    b = np.array(bouts, dtype=int)
+    return pd.DataFrame({
+        "start_idx": b[:, 0],
+        "end_idx": b[:, 1],
+        "start_time_s": b[:, 0] / fs,
+        "end_time_s": b[:, 1] / fs,
+        "duration_s": (b[:, 1] - b[:, 0]) / fs,
+    })
+
+
+def _empty_segment_df() -> pd.DataFrame:
+    return pd.DataFrame({
+        "start_idx": np.array([], dtype=int),
+        "end_idx": np.array([], dtype=int),
+        "start_time_s": np.array([], dtype=float),
+        "end_time_s": np.array([], dtype=float),
+        "duration_s": np.array([], dtype=float),
+    })

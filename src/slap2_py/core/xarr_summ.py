@@ -1,4 +1,5 @@
 import os as os
+import shutil
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -254,18 +255,65 @@ def ROI_data_to_xr(
 
 
 def save_xr_to_zarr(das: dict[str, xr.DataArray], path: str):
-    """Save dict of DataArrays to a Zarr store, one group per DMD."""
+    """Save dict of DataArrays to a Zarr store, one group per DMD.
+
+    The store is written to a sibling temporary directory first and only swapped
+    into place once fully written, so an interrupted or concurrent write can
+    never leave a half-written (corrupt) store at ``path``. The slow part — the
+    actual chunk writes — happens entirely in the temp location and never
+    touches the live store; the swap itself is two fast directory renames. If
+    the process dies mid-swap, both the previous store and the new one remain on
+    disk (as ``{path}.bak`` / ``{path}.tmp``) and are recovered on the next call
+    rather than being lost.
+
+    This atomicity is why DMD groups being written second (``dmd_2``) used to end
+    up as the corrupt one after an interrupted generation — the writer clobbered
+    the live store in place. It no longer can.
+    """
+    if not das:
+        return
+
     compressor = Blosc(cname="zstd", clevel=3)
+    tmp_path = f"{path}.tmp"
+    bak_path = f"{path}.bak"
+
+    # Self-heal from a prior crash mid-swap: if the live store is gone but a
+    # backup survived, restore it before doing anything else.
+    if not os.path.exists(path) and os.path.exists(bak_path):
+        os.rename(bak_path, path)
+
+    # Clear leftovers from any previously interrupted run.
+    for stale in (tmp_path, bak_path):
+        if os.path.exists(stale):
+            shutil.rmtree(stale)
+
+    # Write the complete store into the temp location (never touches `path`).
     for key, da in das.items():
         n_ch, n_syn, n_time = da.shape
         chunks = (1, 1, n_time)  # one channel + one synapse per chunk
         ds = da.to_dataset(name="data")
         ds.to_zarr(
-            path,
+            tmp_path,
             group=key,
             mode="w" if key == sorted(das.keys())[0] else "a",
             encoding={"data": {"chunks": chunks, "compressor": compressor}},
         )
+
+    # Swap the finished store into place. The only destructive steps are two
+    # fast renames; an interruption between them leaves both stores recoverable
+    # (see the self-heal above) rather than corrupt.
+    if os.path.exists(path):
+        os.rename(path, bak_path)
+    try:
+        os.rename(tmp_path, path)
+    except BaseException:
+        # Final swap failed — roll back to the previous store if we moved it.
+        if os.path.exists(bak_path) and not os.path.exists(path):
+            os.rename(bak_path, path)
+        raise
+    finally:
+        if os.path.exists(bak_path):
+            shutil.rmtree(bak_path)
 
 
 def load_xr_from_zarr(
